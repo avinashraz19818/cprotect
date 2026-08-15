@@ -1159,7 +1159,7 @@ async def cmd_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rep = update.message.reply_to_message
     if rep:  # kisi premium-emoji message pe reply -> IDs dikhao/save karo
         raw = rep.text or rep.caption or ""
-        ents = (rep.entities or []) + (rep.caption_entities or [])
+        ents = (rep.entities or ()) + (rep.caption_entities or ())
         pairs = [(raw[e.offset:e.offset + e.length], e.custom_emoji_id)
                  for e in ents if e.type == "custom_emoji" and e.custom_emoji_id]
         if not pairs:
@@ -2022,11 +2022,13 @@ async def cb_owner(qy, ctx, u, act: str):
         st(ctx).update(k="pe_auto")
         await safe_edit(qy,
             f"🪄 <b>AUTO-MAP</b>\n{LINE}\n"
-            "Ab mujhe ek message bhejein jisme aapke <b>premium emoji</b> hon.\n\n"
-            "<b>Kaise?</b>\n"
-            "1️⃣ Emoji keyboard kholein → premium/animated pack chunein\n"
-            "2️⃣ Jitne emoji chahiye sab ek hi message me bhej dein\n"
-            "3️⃣ Send — main unki IDs nikal ke save kar dunga\n\n"
+            "Ab mujhe bhejein — koi bhi ek:\n\n"
+            "<b>Option 1: Emoji Pack Link</b> (sabse aasan)\n"
+            "   <code>https://t.me/addemoji/PackName</code>\n"
+            "   Pack ka link bhejte hi saare emoji import ho jayenge!\n\n"
+            "<b>Option 2: Premium Emoji Message</b>\n"
+            "   Emoji keyboard se premium/animated emoji bhejein\n"
+            "   Sab ek hi message me daal dein\n\n"
             "<b>Mapping kaise hoti hai?</b>\n"
             "Har premium emoji ka apna <i>base</i> emoji hota hai (jaise ✅ ka\n"
             "premium version bhi ✅ hi hota hai) — usi base pe map ho jayega.\n\n"
@@ -2258,7 +2260,60 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ───── ✨ PREMIUM EMOJI STATES ─────
     if k == "pe_auto" and is_admin(u.id):
         clear_st(ctx)
-        ents = (msg.entities or []) + (msg.caption_entities or [])
+        # Check if user sent an emoji pack link (e.g. https://t.me/addemoji/PackName)
+        pack_match = re.search(r'(?:https?://)?t\.me/(?:addemoji|addstickers)/(\w+)', text)
+        if pack_match:
+            pack_name = pack_match.group(1)
+            try:
+                sticker_set = await ctx.bot.get_sticker_set(pack_name)
+                pairs = []
+                for sticker in sticker_set.stickers:
+                    if sticker.custom_emoji_id and sticker.emoji:
+                        pairs.append((sticker.emoji, sticker.custom_emoji_id))
+                if not pairs:
+                    await msg.reply_text(
+                        f"❌ <b>Pack me koi custom emoji nahi hai</b>\\n{LINE}\\n"
+                        f"Pack: <code>{esc(pack_name)}</code>\\n\\n"
+                        "Ye pack premium emoji pack nahi lag raha.",
+                        parse_mode=HTML,
+                        reply_markup=kb([[B("🪄 Try Again", callback_data="o:peauto")],
+                                         [B("‹ Back", callback_data="o:pe")]]))
+                    return
+                n = 0
+                for base, eid in pairs:
+                    await save_emoji(base, eid)
+                    await save_emoji(_plain_key(base), eid)
+                    n += 1
+                total = len(config.EMOJI_SLOTS)
+                done = sum(1 for e in config.EMOJI_SLOTS
+                           if e in EMOJI_MAP or _plain_key(e) in EMOJI_MAP)
+                shown = "  ".join(f"{b}" for b, _ in pairs[:12])
+                global EMOJI_SUPPORTED
+                EMOJI_SUPPORTED = True  # Reset after successful import
+                await msg.reply_text(
+                    f"✅ <b>{n} EMOJI PACK SE IMPORTED!</b>\n{LINE}\n"
+                    f"📦 Pack: <b>{esc(sticker_set.title)}</b>\n"
+                    f"{shown}\n{LINE}\n"
+                    f"🗂 Coverage: <b>{done}/{total}</b>  {bar(done, total, 12)}\n\n"
+                    "Ye emoji ab bot ke har message me automatically use honge ✨",
+                    parse_mode=HTML,
+                    reply_markup=kb([[B("🪄 Add More", callback_data="o:peauto"),
+                                      B("👁 Preview", callback_data="o:peprev")],
+                                     [B("✨ Emoji Panel", callback_data="o:pe")]]))
+                await audit(u.id, "emoji_map", "pack_import", f"{n} from {pack_name}")
+            except Exception as e:
+                await msg.reply_text(
+                    f"❌ <b>Pack load nahi ho paya</b>\n{LINE}\n"
+                    f"Pack: <code>{esc(pack_name)}</code>\n"
+                    f"Error: <code>{esc(str(e)[:100])}</code>\n\n"
+                    "Link sahi hai? Pack public hai?",
+                    parse_mode=HTML,
+                    reply_markup=kb([[B("🪄 Try Again", callback_data="o:peauto")],
+                                     [B("‹ Back", callback_data="o:pe")]]))
+            return
+
+        # Normal: extract emoji from message entities
+        ents = (msg.entities or ()) + (msg.caption_entities or ())
         raw = msg.text or msg.caption or ""
         pairs = []
         for en in ents:
@@ -2269,8 +2324,9 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not pairs:
             await msg.reply_text(
                 f"❌ <b>Koi premium emoji nahi mila</b>\n{LINE}\n"
-                "Message me <b>animated / premium</b> emoji hone chahiye —\n"
-                "normal emoji ki koi ID nahi hoti.\n\n"
+                "Ya to <b>premium emoji wala message</b> bhejein\n"
+                "ya <b>emoji pack ka link</b> bhejein:\n"
+                "<code>https://t.me/addemoji/PackName</code>\n\n"
                 "Emoji keyboard me premium pack (👑 wala) se emoji chunein.",
                 parse_mode=HTML,
                 reply_markup=kb([[B("🪄 Try Again", callback_data="o:peauto")],
@@ -2285,6 +2341,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         done = sum(1 for e in config.EMOJI_SLOTS
                    if e in EMOJI_MAP or _plain_key(e) in EMOJI_MAP)
         shown = "  ".join(f"{b}" for b, _ in pairs[:12])
+        EMOJI_SUPPORTED = True  # Reset after successful import
         await msg.reply_text(
             f"✅ <b>{n} PREMIUM EMOJI SAVED!</b>\n{LINE}\n"
             f"{shown}\n{LINE}\n"
