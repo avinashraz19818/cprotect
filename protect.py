@@ -115,7 +115,10 @@ def premiumize(text: str) -> str:
     def repl(m: re.Match) -> str:
         e = m.group()
         eid = EMOJI_MAP.get(e) or EMOJI_MAP.get(_plain_key(e))
-        return f'<tg-emoji emoji-id="{eid}">{e}</tg-emoji>' if eid else e
+        if not eid:
+            return e
+        # Wrap in tg-emoji tag
+        return f'<tg-emoji emoji-id="{eid}">{e}</tg-emoji>'
 
     # tags aur <code>/<pre> blocks ko chhod kar sirf plain text me replace
     out, last = [], 0
@@ -132,7 +135,7 @@ def _is_emoji_error(err: Exception) -> bool:
     return any(x in s for x in (
         "custom emoji", "custom_emoji", "emoji_id", "tg-emoji",
         "unsupported start tag", "not enough rights to send custom emoji",
-        "sticker_id_invalid", "premium",
+        "sticker_id_invalid", "premium", "invalid emoji",
     ))
 
 
@@ -192,12 +195,16 @@ class PremiumBot(ExtBot):
 async def load_emoji_map():
     """DB se saved premium emoji IDs load karta hai."""
     global EMOJI_MAP, EMOJI_ON
+    # Start with defaults from config (pre-loaded emoji IDs)
     EMOJI_MAP = dict(config.EMOJI_IDS)
     rows = await q("SELECT emoji, emoji_id FROM emoji_map", (), "all")
     for r in rows:
         EMOJI_MAP[r["emoji"]] = r["emoji_id"]
     EMOJI_ON = (await get_setting("premium_emoji", "1" if config.PREMIUM_EMOJI else "0")) == "1"
-    log.info("✨ Premium emoji: %s | %d mapped", "ON" if EMOJI_ON else "OFF", len(EMOJI_MAP))
+    mapped_in_defaults = sum(1 for e in config.EMOJI_SLOTS
+                             if e in EMOJI_MAP or _plain_key(e) in EMOJI_MAP)
+    log.info("✨ Premium emoji: %s | %d mapped (%d/%d slots covered)",
+             "ON" if EMOJI_ON else "OFF", len(EMOJI_MAP), mapped_in_defaults, len(config.EMOJI_SLOTS))
 
 
 async def save_emoji(emoji: str, emoji_id: str):
@@ -518,12 +525,12 @@ LINE = "━━━━━━━━━━━━━━━━━━━━━━"
 async def safe_edit(qy, text: str, markup: M | None = None, preview: bool = False):
     try:
         await qy.edit_message_text(text, reply_markup=markup, parse_mode=HTML,
-                                   disable_web_page_preview=not preview)
+                                   link_preview_options=LinkPreviewOptions(is_disabled=not preview))
     except BadRequest as e:
         if "not modified" not in str(e).lower():
             try:
                 await qy.message.reply_text(text, reply_markup=markup, parse_mode=HTML,
-                                            disable_web_page_preview=True)
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True))
             except Exception:
                 pass
 
@@ -531,7 +538,7 @@ async def safe_edit(qy, text: str, markup: M | None = None, preview: bool = Fals
 async def dm(ctx, uid: int, text: str, markup: M | None = None) -> bool:
     try:
         await ctx.bot.send_message(uid, text, parse_mode=HTML, reply_markup=markup,
-                                   disable_web_page_preview=True)
+                                   link_preview_options=LinkPreviewOptions(is_disabled=True))
         return True
     except (Forbidden, BadRequest, TelegramError):
         return False
@@ -811,7 +818,7 @@ async def punish(ctx, ch: dict, user, reason_code: str, reason_txt: str,
     if cli and cli["log_channel"]:
         try:
             await ctx.bot.send_message(cli["log_channel"], card, parse_mode=HTML,
-                                       disable_web_page_preview=True)
+                                       link_preview_options=LinkPreviewOptions(is_disabled=True))
         except Exception:
             pass
 
@@ -1005,10 +1012,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             t, k = scr_guest(u.full_name)
         await update.message.reply_text(t, reply_markup=k, parse_mode=HTML,
-                                        disable_web_page_preview=True)
+                                        link_preview_options=LinkPreviewOptions(is_disabled=True))
         return
     await update.message.reply_text(t, reply_markup=k, parse_mode=HTML,
-                                    disable_web_page_preview=True)
+                                    link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 
 async def cmd_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

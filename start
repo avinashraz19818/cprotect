@@ -98,8 +98,8 @@ if [ -f "$PIDFILE" ]; then
 fi
 
 # (c) naam se bache hue (sirf isi folder ke)
-for p in $(pgrep -f "bot\.py" 2>/dev/null); do
-    is_ours "$p" && add_target "$p"
+for p in $(pgrep -f "protect\.py" 2>/dev/null); do
+    is_bot_proc "$p" && add_target "$p"
 done
 
 COUNT=$(echo $TARGETS | wc -w)
