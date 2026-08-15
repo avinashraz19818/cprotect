@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# ══════════════════════════════════════════════════════════════
+#  cProtect — Start Script
+#  Use:  bash start.sh
+#  Kaam: venv banao → activate → requirements install →
+#        purana bot band → naya background me start
+# ══════════════════════════════════════════════════════════════
+
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+
+VENV=".venv"
+LOG="bot.log"
+PIDFILE="bot.pid"
+
+G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
+ok(){   echo -e "${G}✅ $1${N}"; }
+info(){ echo -e "${C}➜  $1${N}"; }
+warn(){ echo -e "${Y}⚠️  $1${N}"; }
+die(){  echo -e "${R}❌ $1${N}"; exit 1; }
+
+echo -e "${B}"
+echo "╔══════════════════════════════════════╗"
+echo "║        🛡  cProtect  Launcher        ║"
+echo "╚══════════════════════════════════════╝"
+echo -e "${N}"
+
+# ── 1. Python check ───────────────────────────────────────────
+PY=""
+for c in python3.12 python3.11 python3 python; do
+    command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }
+done
+[ -z "$PY" ] && die "Python nahi mila. Chalayein:  sudo apt install -y python3 python3-venv python3-pip"
+info "Python: $($PY --version 2>&1)  ($(command -v $PY))"
+
+# ── 2. Purana bot band karo ───────────────────────────────────
+info "Purana running bot check kar rahe hain..."
+HERE="$(pwd)"
+TARGETS=""
+
+# Sirf asli "python protect.py" process, aur wo bhi isi folder ka.
+# (Shell/grep/editor jaise process jinke command me 'protect.py' aata hai — unhe chhodna zaroori hai)
+is_ours() {
+    local p="$1" argv exe first found_bot=0
+    [ "$p" = "$$" ] || [ "$p" = "$PPID" ] || [ "$p" = "1" ] || return 1
+    return 1
+}
+is_bot_proc() {
+    local p="$1"
+    [ "$p" = "$$" ] || [ "$p" = "$PPID" ] && return 1
+    [ -r "/proc/$p/cmdline" ] || return 1
+
+    # argv ko array me padho (NUL separated)
+    local argv=() a
+    while IFS= read -r -d '' a; do argv+=("$a"); done < "/proc/$p/cmdline"
+    [ "${#argv[@]}" -ge 2 ] || return 1
+
+    # argv[0] python hona chahiye
+    case "$(basename "${argv[0]}")" in
+        python|python3|python3.*|python2*) ;;
+        *) return 1 ;;
+    esac
+
+    # kisi argument ka basename protect.py ho
+    local hit=1 x
+    for x in "${argv[@]:1}"; do
+        [ "$(basename "$x")" = "protect.py" ] && { hit=0; break; }
+    done
+    [ "$hit" = "0" ] || return 1
+
+    # aur wo isi folder ka bot ho.
+    # (a) process ka apna cwd yahi ho — "python protect.py" wala case
+    [ "$(readlink -f "/proc/$p/cwd" 2>/dev/null)" = "$HERE" ] && return 0
+    # (b) ya poora absolute path diya ho — "python /path/cprotect/protect.py"
+    #     relative path yahan match NAHI karna hai, warna dusre folder ka
+    #     bot bhi galti se maara jayega
+    for x in "${argv[@]:1}"; do
+        case "$x" in
+            /*) [ "$(readlink -f "$x" 2>/dev/null)" = "$HERE/protect.py" ] && return 0 ;;
+        esac
+    done
+    return 1
+}
+add_target() {
+    case " $TARGETS " in *" $1 "*) ;; *) TARGETS="$TARGETS $1" ;; esac
+}
+
+# (a) systemd service chalu ho to pehle wo
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cprotect 2>/dev/null; then
+    warn "systemd service 'cprotect' chal rahi hai — band kar rahe hain"
+    sudo systemctl stop cprotect 2>/dev/null
+fi
+
+# (b) pidfile se
+if [ -f "$PIDFILE" ]; then
+    OLD=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null && add_target "$OLD"
+    rm -f "$PIDFILE"
+fi
+
+# (c) naam se bache hue (sirf isi folder ke)
+for p in $(pgrep -f "bot\.py" 2>/dev/null); do
+    is_ours "$p" && add_target "$p"
+done
+
+COUNT=$(echo $TARGETS | wc -w)
+if [ "$COUNT" -gt 0 ]; then
+    for p in $TARGETS; do kill "$p" 2>/dev/null; done
+    for i in 1 2 3 4 5 6; do
+        ALIVE=0
+        for p in $TARGETS; do kill -0 "$p" 2>/dev/null && ALIVE=1; done
+        [ "$ALIVE" = "0" ] && break
+        sleep 1
+    done
+    for p in $TARGETS; do kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null; done
+    sleep 1
+    ok "$COUNT purana process band kiya"
+else
+    ok "Koi purana bot nahi chal raha"
+fi
+
+# ── 3. Virtual environment ────────────────────────────────────
+if [ ! -f "$VENV/bin/activate" ]; then
+    info "Virtual environment bana rahe hain ($VENV)..."
+    rm -rf "$VENV"
+    $PY -m venv "$VENV" 2>/dev/null || {
+        warn "venv fail — python3-venv install kar rahe hain"
+        sudo apt update -qq && sudo apt install -y python3-venv >/dev/null 2>&1
+        $PY -m venv "$VENV" || die "venv nahi bana. Chalayein: sudo apt install -y python3-venv"
+    }
+    ok "Virtual environment ban gaya"
+    FRESH=1
+else
+    ok "Virtual environment mil gaya"
+    FRESH=0
+fi
+
+# ── 4. Activate ───────────────────────────────────────────────
+# shellcheck disable=SC1090
+source "$VENV/bin/activate" || die "venv activate nahi hua"
+ok "Activated → $VIRTUAL_ENV"
+
+# ── 5. Requirements install ───────────────────────────────────
+[ -f requirements.txt ] || die "requirements.txt nahi mila"
+
+NEED=1
+if [ "$FRESH" = "0" ] && [ -f "$VENV/.reqhash" ]; then
+    NEW=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1)
+    [ "$NEW" = "$(cat "$VENV/.reqhash" 2>/dev/null)" ] && NEED=0
+fi
+
+if [ "$NEED" = "1" ]; then
+    info "Dependencies install ho rahi hain (thoda time lagega)..."
+    python -m pip install --upgrade pip -q 2>/dev/null
+    if python -m pip install -q -r requirements.txt; then
+        md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 > "$VENV/.reqhash"
+        ok "Dependencies install ho gayi"
+    else
+        die "pip install fail hua — upar ka error dekhein"
+    fi
+else
+    ok "Dependencies pehle se updated hain"
+fi
+
+# ── 6. Config check ───────────────────────────────────────────
+[ -f protect.py ] || die "protect.py nahi mila"
+
+if [ ! -f .env ]; then
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        warn ".env banaya gaya hai — ab isme BOT_TOKEN daalein:"
+        echo -e "   ${B}nano .env${N}   (token paste → Ctrl+O → Enter → Ctrl+X)"
+        echo -e "   Phir dobara chalayein: ${B}bash start.sh${N}"
+        exit 1
+    fi
+    warn ".env nahi mila — token environment se lena hoga"
+fi
+
+if [ -f .env ]; then
+    TOK=$(grep -m1 '^BOT_TOKEN=' .env 2>/dev/null | cut -d= -f2- | tr -d ' "'"'"'\r')
+    if [ -z "$TOK" ] || [ "$TOK" = "123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ]; then
+        die ".env me asli BOT_TOKEN daalein → nano .env"
+    fi
+    case "$TOK" in
+        *:*) ;;
+        *) die "BOT_TOKEN galat lag raha hai (format: 123456789:AAxxxx...) → nano .env" ;;
+    esac
+fi
+
+# ── 7. Syntax check ───────────────────────────────────────────
+python -m py_compile protect.py config.py 2>/dev/null && ok "Code syntax sahi hai" \
+    || warn "Syntax warning — log dekhte rahiyega"
+rm -rf __pycache__ 2>/dev/null
+
+# ── 8. Background me start ────────────────────────────────────
+info "Bot start ho raha hai..."
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.old" 2>/dev/null
+
+setsid nohup python -u protect.py >> "$LOG" 2>&1 < /dev/null &
+PID=$!
+echo "$PID" > "$PIDFILE"
+disown 2>/dev/null
+
+# ── 9. Verify ─────────────────────────────────────────────────
+sleep 6
+if kill -0 "$PID" 2>/dev/null; then
+    echo
+    ok "Bot BACKGROUND me chal raha hai"
+    echo -e "   ${B}PID${N}  : $PID"
+    echo -e "   ${B}Log${N}  : $(pwd)/$LOG"
+    echo
+    echo -e "${C}── Log (last 12 lines) ──${N}"
+    tail -n 12 "$LOG" 2>/dev/null
+    echo
+    echo -e "${B}Commands:${N}"
+    echo -e "   Live log   : ${C}tail -f $LOG${N}"
+    echo -e "   Restart    : ${C}bash start.sh${N}"
+    echo -e "   Stop       : ${C}kill \$(cat $PIDFILE)${N}"
+    echo -e "   Status     : ${C}ps -p \$(cat $PIDFILE)${N}"
+    echo
+    echo -e "${G}${B}🎉 Telegram pe jaakar /start bhejein${N}"
+else
+    rm -f "$PIDFILE"
+    echo
+    echo -e "${R}${B}❌ Bot start nahi hua${N}"
+    echo
+
+    # Aam galtiyon ka seedha jawab
+    if grep -q "InvalidToken\|was rejected by the server" "$LOG" 2>/dev/null; then
+        echo -e "${Y}Wajah:${N} BOT_TOKEN galat hai — Telegram ne reject kiya."
+        echo -e "${Y}Hal  :${N} @BotFather → /mytoken → sahi token copy → ${B}nano .env${N}"
+    elif grep -q "Conflict: terminated by other getUpdates" "$LOG" 2>/dev/null; then
+        echo -e "${Y}Wajah:${N} Yahi bot kahin aur bhi chal raha hai (dusra VPS/PC)."
+        echo -e "${Y}Hal  :${N} Wahan band karein, phir ${B}bash start.sh${N}"
+    elif grep -q "ModuleNotFoundError" "$LOG" 2>/dev/null; then
+        echo -e "${Y}Wajah:${N} Koi library missing hai."
+        echo -e "${Y}Hal  :${N} ${B}rm -rf .venv && bash start.sh${N}"
+    elif grep -q "Unauthorized" "$LOG" 2>/dev/null; then
+        echo -e "${Y}Wajah:${N} Token unauthorized — bot delete/revoke to nahi hua?"
+        echo -e "${Y}Hal  :${N} @BotFather se naya token lein"
+    else
+        echo -e "${Y}Error ki aakhri lines:${N}"
+    fi
+
+    echo
+    echo -e "${C}── $LOG (last 15 lines) ──${N}"
+    tail -n 15 "$LOG" 2>/dev/null
+    echo
+    echo -e "Poora log: ${B}cat $LOG${N}"
+    exit 1
+fi

@@ -1,0 +1,29 @@
+# secrets
+.env
+*.env
+!.env.example
+
+# database
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# logs
+*.log
+nohup.out
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
