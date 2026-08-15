@@ -1262,14 +1262,31 @@ async def notify_new_sub(ctx, c: dict, days: int):
 async def send_backup(ctx, chat_id: int):
     try:
         await q("PRAGMA wal_checkpoint(FULL)")
+        if not os.path.exists(config.DB_PATH):
+            await ctx.bot.send_message(chat_id, "❌ Database file nahi mili.", parse_mode=HTML)
+            return
         with open(config.DB_PATH, "rb") as f:
             data = f.read()
+        if len(data) < 100:
+            await ctx.bot.send_message(chat_id, "⚠️ Database abhi khali hai — backup skip.", parse_mode=HTML)
+            return
+        fname = f"cprotect_backup_{datetime.now(config.TZ).strftime('%d%b%Y')}.db"
         await ctx.bot.send_document(
-            chat_id, InputFile(io.BytesIO(data), filename=f"cprotect_{fdate(now()).replace(' ','')}.db"),
+            chat_id, InputFile(io.BytesIO(data), filename=fname),
             caption=f"🗄 <b>Database Backup</b>\n📅 {fdatetime(now())}\n📦 {len(data)/1024:.1f} KB",
             parse_mode=HTML)
+    except BadRequest as e:
+        log.warning("Backup send failed: %s", e)
+        try:
+            await ctx.bot.send_message(chat_id, f"⚠️ Backup fail: {esc(e)}", parse_mode=HTML)
+        except Exception:
+            pass
     except Exception as e:
-        await ctx.bot.send_message(chat_id, f"❌ Backup failed: {esc(e)}", parse_mode=HTML)
+        log.warning("Backup send failed: %s", e)
+        try:
+            await ctx.bot.send_message(chat_id, f"❌ Backup failed: {esc(e)}", parse_mode=HTML)
+        except Exception:
+            pass
 
 
 async def do_broadcast(ctx, msg, text: str):
