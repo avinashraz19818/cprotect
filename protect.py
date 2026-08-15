@@ -135,7 +135,8 @@ def _is_emoji_error(err: Exception) -> bool:
     return any(x in s for x in (
         "custom emoji", "custom_emoji", "emoji_id", "tg-emoji",
         "unsupported start tag", "not enough rights to send custom emoji",
-        "sticker_id_invalid", "premium", "invalid emoji",
+        "sticker_id_invalid", "premium", "invalid emoji", "document_invalid",
+        "invalid document", "bad request",
     ))
 
 
@@ -162,7 +163,18 @@ class PremiumBot(ExtBot):
                 log.warning("⚠️ Custom emoji rejected by Telegram (%s) → plain fallback", e)
                 EMOJI_SUPPORTED = False
                 kwargs[field] = original
-        return await fn(**kwargs)
+                # Try again with plain text
+                try:
+                    return await fn(**kwargs)
+                except Exception as e2:
+                    log.error("Fallback also failed: %s", e2)
+                    raise
+        # No premium emoji, just send normally
+        try:
+            return await fn(**kwargs)
+        except Exception as e:
+            log.error("Send failed: %s", e)
+            raise
 
     async def send_message(self, *args, **kwargs):
         if args:      # positional -> normalize
